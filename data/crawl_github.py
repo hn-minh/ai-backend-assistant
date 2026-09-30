@@ -12,14 +12,16 @@ TARGET_REPOS = [
     "fastapi/full-stack-fastapi-template",
     "GokuMohandas/Made-With-ML",
     "LAION-AI/Open-Assistant",
-    "getsentry/sentry",
     "betaacid/FastAPI-Reference-App",
     "the-momentum/python-ai-kit",
     "Kludex/fastapi-tips",
     "koldakov/futuramaapi",
     "Sanjeev-Thiyagarajan/fastapi-course",
-    "Netflix/dispatch",
-    "apache/airflow"
+    "benavlabs/FastAPI-boilerplate",
+    "benavlabs/fastcrud",
+    "JakubPluta/gymhero",
+    "douglaschalegre/fastapi-template",
+    "AmirHbro/fastapi-blog-sqlalchemy-v2"
 ]
 
 HEADERS = {

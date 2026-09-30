@@ -13,6 +13,7 @@ dependencies = [
     "matplotlib>=3.11.2",
     "openai>=3.14.1",
     "pandas>=3.0.5",
+    "pyflakes>=4.0.0",
     "python-dotenv>=1.2.3",
     "pyyml>=0.0.2",
     "requests>=2.34.2",

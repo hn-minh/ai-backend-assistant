@@ -11,14 +11,15 @@ client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 SEMAPHORE = asyncio.Semaphore(5)
 
-SYSTEM_PROMPT = """You are an expert AI Backend Engineer. 
-Your task is to reverse-engineer a realistic user instruction (in English) that would generate the provided Python function.
+SYSTEM_PROMPT = """You are a practical Python backend developer asking an AI coding assistant for help. 
+Your task is to reverse-engineer the prompt you would have typed to get the provided Python code as the answer.
 
-Guidelines:
-1. The instruction should be natural, detailed, and context-aware (e.g., mention FastAPI, SQLAlchemy, or Vector DBs if the code implies it).
-2. Clearly state the requirements, input types, and expected output.
-3. DO NOT include the actual code or the exact function name in your prompt. Frame it as a problem to be solved.
-4. Output ONLY the user instruction text, without any conversational filler or formatting block."""
+Guidelines for generating the prompt:
+1. **Be Natural & Conversational:** Write like a real human developer. DO NOT use robotic, overly prescriptive templates like "Create a function that takes 3 parameters and returns a dictionary."
+2. **Focus on Intent (The "What" and "Why"):** Describe the feature, bug fix, or business logic you need to implement, rather than translating the code line-by-line. (e.g., "Write a FastAPI endpoint to process user webhooks and save them to Postgres" is much better than "Create a function that accepts a Request object and a DB session...").
+3. **Vary the Detail Level:** Real developers write different types of prompts. Sometimes write short, high-level requests; other times provide a bit more context about the stack (e.g., SQLAlchemy, Pydantic, Redis).
+4. **No Spoilers:** DO NOT include the actual code, the exact function name, or internal variable names in your prompt.
+5. **Strict Output:** Output ONLY the user instruction text, without any conversational filler, intro, or formatting block."""
 
 async def generate_instruction(func_code: str) -> str:
     async with SEMAPHORE:
