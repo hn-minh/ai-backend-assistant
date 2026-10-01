@@ -1,0 +1,31 @@
+Task ID,Base Executable,LoRA Executable
+1,❌ SyntaxError: unterminated string literal (detected at line 53) at line 53,Pass
+2,❌ SyntaxError: unterminated string literal (detected at line 22) at line 22,Pass
+3,Pass,Pass
+4,Pass,Pass
+5,Pass,Pass
+6,❌ SyntaxError: invalid syntax at line 1,❌ SyntaxError: invalid syntax at line 1
+7,Pass,Pass
+8,Pass,Pass
+9,Pass,Pass
+10,❌ SyntaxError: invalid syntax at line 1,Pass
+11,Pass,Pass
+12,Pass,Pass
+13,Pass,Pass
+14,❌ SyntaxError: invalid syntax at line 1,Pass
+15,❌ SyntaxError: invalid syntax at line 1,Pass
+16,❌ SyntaxError: invalid syntax at line 1,Pass
+17,Pass,Pass
+18,❌ SyntaxError: invalid syntax at line 1,Pass
+19,Pass,Pass
+20,Pass,Pass
+21,Pass,Pass
+22,❌ SyntaxError: invalid syntax at line 1,Pass
+23,❌ SyntaxError: invalid syntax at line 1,Pass
+24,❌ SyntaxError: invalid syntax at line 1,Pass
+25,❌ SyntaxError: invalid syntax at line 1,Pass
+26,Pass,Pass
+27,❌ SyntaxError: invalid syntax at line 1,Pass
+28,Pass,Pass
+29,❌ SyntaxError: invalid syntax at line 1,Pass
+30,Pass,Pass

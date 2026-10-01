@@ -1,0 +1,837 @@
+﻿Task ID,Category,Base Code,Base Score,Base Reason,LoRA Code,LoRA Score,LoRA Reason,Status
+1,Database & System Architecture,"```python
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import openai
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import SQLAlchemyError
+
+app = FastAPI()
+
+# Configure OpenAI API key
+openai.api_key = 'your_openai_api_key'
+
+# Database configuration
+DATABASE_URL = 'postgresql+asyncpg://user:password@localhost/dbname'
+engine = create_async_engine(DATABASE_URL, echo=True)
+AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+class Job(BaseModel):
+    prompt: str
+
+class JobDB(BaseModel):
+    id: int
+    prompt: str
+    result: str
+    status: str
+
+@app.post(""/jobs/"")
+async def create_job(job: Job):
+    try:
+        # Call OpenAI API
+        response = await openai.Completion.create(
+            engine=""text-davinci-003"",
+            prompt=job.prompt,
+            max_tokens=150
+        )
+        result = response.choices[0].text.strip()
+        
+        # Save job to database
+        async with AsyncSessionLocal() as session:
+            db_job = JobDB(id=None, prompt=job.prompt, result=result, status='completed')
+            session.add(db_job)
+            await session.commit()
+            await session.refresh(db_job)
+            
+            return {""id"": db_job.id, ""prompt"": db_job.prompt, ""result"": db_job.result, ""status"": db_job.status}
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+```
+
+This code snippet defines a FastAPI endpoint `/jobs/` that takes a `Job` object containing a `prompt`, calls the OpenAI API to generate text based on this prompt, and saves the result along with the job details in a PostgreSQL database. The endpoint handles exceptions by raising an HTTPException if there's an error during the process.",3,"The code correctly separates the OpenAI API call from the database transaction, but lacks a specific rollback mechanism in case of database errors, which could lead to incomplete transactions.","@router.post('/jobs/')
+async def create_job(request: schemas.JobCreate, db: Session=Depends(database.get_db)):
+    job = models.Job()
+    job.prompt = request.prompt
+    job.created_at = datetime.datetime.now()
+    job.user_id = 0
+    db.add(job)
+    try:
+        response = openai.Completion.create(engine_id='curie', prompt=request.prompt, max_tokens=500)
+        job.result = response.choices[0].text.strip()
+        job.state = 'complete'
+        db.commit()
+        return {'id': job.id}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))",4,"The code correctly uses a try-except block and includes a rollback on error, but it calls the OpenAI API inside the DB transaction, which could lead to database locking issues.",LoRA Win
+2,Database & System Architecture,"```python
+from sqlalchemy import select, update
+from sqlalchemy.orm import Session
+from typing import Optional
+
+async def get_and_update_job(session: Session) -> Optional[Job]:
+    async with session.begin():
+        stmt = (
+            select(Job)
+            .where(Job.status == 'pending')
+            .with_for_update()
+        )
+        job = await session.execute(stmt).scalar_one_or_none()
+        
+        if job:
+            job.status = 'running'
+            await session.commit()
+    
+    return job
+```
+
+This function uses SQLAlchemy's `select` statement to query the `jobs` table for a job with a status of 'pending'. The `with_for_update()` method ensures that the selected row is locked until the transaction is committed, preventing other transactions from modifying it concurrently. If a job is found, its status is updated to 'running' and the changes are committed. The function returns the updated job object or `None` if no job was found.",2,"The code uses 'with_for_update()' but misses 'skip_locked', which is crucial to prevent blocking other workers. Also, 'await session.commit()' is unnecessary as 'session.begin()' handles the transaction scope.","def acquire_job(self) -> Job | None:
+    """"""Acquire a pending job.
+
+        This method atomically finds a pending job, sets its status to
+        running, and returns it for processing by a worker.
+
+        Returns:
+            The acquired job, or None if no jobs are available.
+
+        Note:
+            Only one worker should call this method at a time. Multiple
+            concurrent calls may result in duplicate work being assigned
+            to different workers.
+        """"""
+    query = self.db.query(Job).filter(Job.status == 'pending').update({'status': 'running'}, synchronize_session=False)
+    self.db.commit()
+    if query > 0:
+        return self.db.query(Job).filter(Job.status == 'running').first()",2,"The code lacks a database-level locking mechanism like SELECT ... FOR UPDATE SKIP LOCKED, which is essential to prevent multiple workers from picking the same job.",Draw
+3,Database & System Architecture,"from fastapi import FastAPI, File, UploadFile, HTTPException
+from typing import Optional
+import asyncio
+
+app = FastAPI()
+
+async def start_fine_tuning(dataset_file: UploadFile):
+    # Simulate long-running task with asyncio.sleep
+    await asyncio.sleep(7200)  # 2 hours
+    return {""message"": ""Fine-tuning completed successfully""}
+
+@app.post(""/train"")
+async def train_model(dataset_file: UploadFile = File(...)):
+    if dataset_file.filename.endswith("".csv""):
+        try:
+            result = await start_fine_tuning(dataset_file)
+            return result
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    else:
+        raise HTTPException(status_code=400, detail=""Unsupported file format"")",2,"The code directly calls the training function in the API, violating the criteria to use a Message Queue or BackgroundTasks and return a job_id with HTTP 202 Accepted.","@router.post('/train')
+async def train_model(file: UploadFile = File(...)):
+    """"""Starts training on uploaded dataset""""""
+    logger.info('Starting training...')
+    df = pd.read_csv(file.file)
+    trainer = Trainer()
+    trainer.train(df)
+    return {'message': 'Training started'}",1,"The code directly calls the training function within the API, violating the criteria to use a Message Queue or BackgroundTasks and return a job_id.",LoRA Lose
+4,Database & System Architecture,"from fastapi import FastAPI, Request, HTTPException
+from pydantic import BaseModel
+import asyncio
+import torch
+
+app = FastAPI()
+
+class Item(BaseModel):
+    input_data: list
+
+async def process_batch(batch):
+    # Simulate model inference
+    with torch.no_grad():
+        result = [torch.randn(1) for _ in batch]  # Replace with actual model inference
+    return result
+
+@app.post(""/predict"")
+async def predict(request: Request):
+    data = await request.json()
+    items = data.get(""items"", [])
+
+    if not isinstance(items, list):
+        raise HTTPException(status_code=400, detail=""Invalid input format"")
+
+    batch_size = 10
+    results = []
+
+    for i in range(0, len(items), batch_size):
+        batch = items[i:i + batch_size]
+        result = await process_batch(batch)
+        results.extend(result)
+
+    return {""results"": results}",2,"The code lacks a load shedding or rate limiting mechanism using asyncio.Semaphore to limit concurrent GPU processing, and it does not handle excess requests with HTTP 429 responses.","@router.post('/infer')
+async def infer(request: InferRequest, db: Session=Depends(get_db)):
+    prompt = request.prompt
+    if len(prompt) > MAX_INPUT_LENGTH:
+        raise HTTPException(status_code=413, detail=f'Input length must be less than {MAX_INPUT_LENGTH}')
+    result = inference_client.infer(prompt)
+    return {'result': result}",1,"The code lacks any implementation of load shedding or rate limiting using asyncio.Semaphore, and it does not handle excess requests with HTTP 429 responses.",LoRA Lose
+5,Database & System Architecture,"from fastapi import FastAPI, HTTPException, Depends
+from sqlalchemy.orm import Session
+from typing import Annotated
+import requests
+
+app = FastAPI()
+
+# Assuming you have a User model and a get_db dependency
+class User:
+    def __init__(self, id: int, credits: int):
+        self.id = id
+        self.credits = credits
+
+def get_user(db: Session, user_id: int) -> User:
+    # Simulate fetching user from database
+    return User(id=user_id, credits=100)
+
+async def charge_credits(user: User, db: Session):
+    if user.credits >= 50:
+        user.credits -= 50
+        # Simulate updating user in database
+        db.commit()
+        return True
+    else:
+        raise HTTPException(status_code=400, detail=""Insufficient credits"")
+
+@app.post(""/generate-image"")
+async def generate_image(
+    user_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: User = Depends(lambda: get_user(db, user_id))
+):
+    if await charge_credits(user, db):
+        try:
+            response = await requests.post(""https://image-generation-api.com/generate"", timeout=10)
+            response.raise_for_status()
+            return {""image_url"": response.json()[""url""]}
+        except requests.RequestException as e:
+            raise HTTPException(status_code=500, detail=f""Image generation failed: {str(e)}"")",2,The code does not implement idempotency using 'Idempotency-Key' or any distributed lock/cache mechanism to prevent duplicate charges.,"@router.post('/generate-image')
+async def generate_image(prompt: str=Depends(deps.prompt_dependency), db: AsyncSession=Depends(deps.get_db), current_user: int=Depends(deps.get_current_user)):
+    """"""
+        Generate an image based on the prompt provided by the user.
+        """"""
+    await check_credits(current_user.id, 50)
+    response = requests.post(f'{settings.IMAGE_GENERATION_API_URL}/prompt', json={'prompt': prompt})
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail='Error generating image')
+    return {'url': response.json()['url']}",1,The code does not retrieve the 'Idempotency-Key' from HTTP headers nor does it implement any mechanism like Redis SETNX or DB constraints to prevent duplicate charges for the same request.,LoRA Lose
+6,Security & Isolation,"```python
+from typing import Dict
+
+async def generate_response(question: str, text_info: Dict[str, str]) -> str:
+    # Placeholder for RAG system logic
+    # Replace this with actual implementation using a Retrieval-Augmented Generation model
+    return f""Answering '{question}' based on provided text: {text_info}""
+```",1,"The code does not encapsulate the retrieved text using XML tags or hard delimiters, nor does it include instructions to prevent prompt injection.","System Prompt Template:
+
+I am a helpful assistant that uses a large language model to answer questions based on a specific context. The context was created using a dataset of articles about various topics. The articles were written by a diverse group of people who may have different perspectives and writing styles. Some articles may contain factual errors or biases. It is important to critically evaluate the information provided and consider multiple sources before forming opinions.",1,"The prompt does not encapsulate the retrieved text using XML tags or hard delimiters, nor does it include an instruction to prevent obeying commands found inside the context section, both of which are required criteria.",Draw
+7,Security & Isolation,"from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from typing import Optional
+
+router = APIRouter()
+
+async def get_chat_by_id(chat_id: int, db: Session):
+    chat = db.query(Chat).filter(Chat.id == chat_id).first()
+    if not chat:
+        raise HTTPException(status_code=404, detail=""Chat not found"")
+    return chat
+
+@router.get(""/chats/{chat_id}"", response_model=Chat)
+async def read_chat(chat_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    chat = await get_chat_by_id(chat_id, db)
+    # Assuming there's a check to ensure the user has access to this chat
+    if not current_user.can_access_chat(chat):
+        raise HTTPException(status_code=403, detail=""Access denied"")
+    return chat",3,"The code checks user access with a method but does not explicitly compare `owner_id` or `user_id` with `current_user.id`, which is required by the criteria.","@router.get('/{chat_id}', response_model=protocol_schema.Chat)
+def get_chat(chat_id: str, db: Session=Depends(database.get_db), current_user: int=Depends(oasst_fastapi.get_current_user)):
+    result = db.query(Chat).filter(Chat.id == chat_id).first()
+    if not result:
+        raise fastapi.HTTPException(status_code=fastapi.status.HTTP_404_NOT_FOUND, detail=f'Chat with id {chat_id} not found')
+    return result",2,"The code does not check if the chat's owner_id or user_id matches current_user.id, which is required to ensure proper access control.",LoRA Lose
+8,Security & Isolation,"from sqlalchemy import create_engine, Column, Integer, String, Text, ForeignKey
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, relationship
+
+Base = declarative_base()
+
+class Document(Base):
+    __tablename__ = 'documents'
+    id = Column(Integer, primary_key=True)
+    content = Column(Text, index=True)
+
+def search_documents_with_keyword(keyword: str) -> list[Document]:
+    engine = create_engine('sqlite:///example.db')
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    
+    try:
+        query = session.query(Document).filter(Document.content.contains(keyword))
+        results = query.all()
+        return results
+    finally:
+        session.close()",2,"The function does not include the required 'AND tenant_id = ?' clause, risking data exposure between tenants.","def search_contract(self) -> list[Message]:
+    """"""Search for messages that contain the word 'contract'.""""""
+    return self.db.query(Message).filter(Message.company_id == self.company_id, Message.text.ilike('%contract%')).all()",2,"The code does not include the required 'AND tenant_id = ?' clause, which is crucial for multi-tenant data isolation in a SaaS application.",Draw
+9,Security & Isolation,"from fastapi import Request, Response
+from fastapi.middleware.base import BaseHTTPMiddleware
+
+class LoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Log request details
+        print(f""Request Method: {request.method}"")
+        print(f""Request URL: {request.url}"")
+        print(f""Request Headers: {dict(request.headers)}"")
+        
+        if request.method == 'POST' or request.method == 'PUT':
+            body = await request.body()
+            print(f""Request Body: {body.decode('utf-8')}"")
+        
+        response: Response = await call_next(request)
+        
+        return response",2,"The code logs headers and body without masking sensitive fields like 'Authorization', 'x-api-key', or 'password', violating the criteria for handling sensitive information.","async def log_request_middleware(request: Request, call_next):
+    print(f'Request Method: {request.method}')
+    print(f'Request URL: {request.url}')
+    print(f'Request Headers: {dict(request.headers)}')
+    if request.method == 'POST' or request.method == 'PUT':
+        body = await request.body()
+        print(f'Request Body: {body.decode()}')
+    response = await call_next(request)
+    return response",2,"The code logs headers and body without masking sensitive fields like 'Authorization', 'x-api-key', or 'password', violating the criteria for handling sensitive information.",Draw
+10,Error Handling & Observability,"```python
+import anthropic
+from fastapi import HTTPException, status
+from typing import Optional
+
+client = anthropic.Client()
+
+async def call_anthropic_api(prompt: str) -> Optional[str]:
+    try:
+        response = await client.completions.create(
+            model=""claude-2"",
+            prompt=prompt,
+            max_tokens=1000,
+            stop_sequences=[""\n\nHuman:""],
+        )
+        return response.text.strip()
+    except anthropic.APIError as e:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f""Anthropic API error: {e}"")
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f""Unexpected error: {e}"")
+
+async def handle_prompt(prompt: str) -> Optional[str]:
+    if len(prompt) > 8000:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=""Prompt exceeds token limit"")
+    
+    return await call_anthropic_api(prompt)
+```",2,"The code does not catch specific exceptions like 429 RateLimit or 400 Context Length individually, and uses a broad Exception catch which is forbidden by the criteria.","def call_anthropic(prompt):
+    try:
+        response = anthropic_client.completions.create(model='claude-instant-6', prompt=prompt)
+        return response.completion
+    except anthropic_client.error.APIError as e:
+        print(f'Anthropic API error: {e}')
+        return None
+    except anthropic_client.error.RateLimitError:
+        print('Rate limit exceeded')
+        return None
+    except anthropic_client.error.APIConnectionError:
+        print('Failed to connect to Anthropic API')
+        return None
+    except anthropic_client.error.InvalidRequestError as e:
+        print(f'Invalid request: {e}')
+        return None
+    except anthropic_client.error.HTTPStatusError as e:
+        print(f'HTTP status error: {e}')
+        return None
+    except anthropic_client.error.JSONDecodeError:
+        print('JSON decode error')
+        return None
+    except Exception as e:
+        print(f'Unexpected error: {e}')
+        return None",4,The code correctly handles specific exceptions but uses a broad 'except Exception' which is discouraged by the criteria.,LoRA Win
+11,Error Handling & Observability,"import asyncio
+
+async def connect_to_gpu_server():
+    max_retries = 5
+    retries = 0
+    
+    while retries < max_retries:
+        try:
+            # Simulate GPU server connection
+            await asyncio.sleep(1)  # Replace with actual connection logic
+            print(""Connected to GPU server successfully!"")
+            return True
+        except Exception as e:
+            retries += 1
+            print(f""Attempt {retries} failed: {e}"")
+    
+    print(""Failed to connect to GPU server after multiple attempts."")
+    return False",2,"The code uses a simple retry loop without implementing Exponential Backoff with Jitter, violating the criteria requirement.","def connect():
+    """"""Connect to GPU server.""""""
+    try:
+        client = grpc.insecure_channel('localhost:8080')
+        return client
+    except Exception as e:
+        print(f'Error connecting to GPU server: {e}')
+        time.sleep(1)
+        for _ in range(5):
+            try:
+                client = grpc.insecure_channel('localhost:8080')
+                return client
+            except Exception as e:
+                print(f'Retrying... Error connecting to GPU server: {e}')
+                time.sleep(1)",1,The code uses a simple for loop and does not implement Exponential Backoff with Jitter as required by the criteria.,LoRA Lose
+12,Error Handling & Observability,"import httpx
+from typing import Dict
+
+async def signal_job_completion(webhook_url: str, payload: Dict[str, Any]) -> None:
+    async with httpx.AsyncClient() as client:
+        response = await client.post(webhook_url, json=payload)
+        response.raise_for_status()",2,"The code does not configure the 'timeout' parameter for the HTTP client, which is crucial for making external network calls.","async def _call_partner_webhook(self, message_id: str, status: str):
+    """"""Call partner webhook signaling job completion.""""""
+    payload = {'messageId': message_id, 'status': status}
+    headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {self._api_key}'}
+    response = await self._client.post(self._webhook_url, json=payload, headers=headers)
+    if response.status_code != 200:
+        raise OasstError(f""Failed to call partner webhook: {response.text}"", OasstErrorCode.PARTNER_WEBHOOK_FAILED)",2,"The code does not configure the 'timeout' parameter for the HTTP client call, violating the criteria.",Draw
+13,Error Handling & Observability,"import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+
+async def log_success(result: str) -> None:
+    logging.info(f""Success: {result}"")
+
+# Example usage within an async function
+async def handle_openai_response(response: dict) -> None:
+    if response.get('success'):
+        await log_success(response['data'])
+    else:
+        logging.error(f""Error: {response['error']}"")",2,"The code logs only a success message without extracting token count, model name, or execution time, which are required for cost tracking.",print(f'Prompt: {prompt}\n\nResponse: {response}\n'),1,"The code only prints the prompt and response, missing the required logging of token count, model name, and execution time.",LoRA Lose
+14,AI Business Logic & API Design,"```python
+from llama_index import GPTVectorStoreIndex, SimpleDirectoryReader
+from llama_index.query_engine import RetrieverQueryEngine
+
+# Load data
+documents = SimpleDirectoryReader('path/to/documents').load_data()
+
+# Create index
+index = GPTVectorStoreIndex(documents)
+
+# Create query engine
+query_engine = RetrieverQueryEngine(index)
+
+# Search logic
+def search(query: str) -> str:
+    response = query_engine.query(query)
+    return response.response
+```
+
+This code sets up a basic RAG (Retrieval-Augmented Generation) pipeline using LlamaIndex. It loads documents from a specified directory, creates an index, and then defines a function `search` that takes a query string and returns the generated response based on the indexed documents.",2,"The code lacks a Query Rewriting step, Hybrid Search, or Reranking, which are necessary to handle temporal context and improve search accuracy as per the criteria.","rag = RagTokenizer.from_pretrained('facebook/rag-token-nq')
+model = RagRetriever.from_pretrained(""facebook/rag-token-nq"", index_name=""exact"", use_dummy_dataset=True)
+qa = RagTokenForQuestionAnswering.from_pretrained(""facebook/rag-token-nq"")
+pipe = rag.QAWithSourcesPipeline(model, rag.tokenizer)",1,"The code does not implement a RAG pipeline using LangChain or LlamaIndex, nor does it address temporal context or hybrid search requirements.",LoRA Lose
+15,AI Business Logic & API Design,"```python
+from typing import Dict
+
+async def calculate_gpt_4_cost(response: Dict) -> float:
+    input_tokens = response['usage']['prompt_tokens']
+    output_tokens = response['usage']['completion_tokens']
+    
+    input_cost = (input_tokens / 1000) * 0.01
+    output_cost = (output_tokens / 1000) * 0.03
+    
+    total_cost = input_cost + output_cost
+    return total_cost
+```",5,"The function correctly separates and calculates the cost for input and output tokens using their respective rates, adhering to the criteria provided.","def gpt4_cost(response):
+    """"""Calculate the cost of a GPT-4 response.""""""
+    input_tokens = response.usage.prompt_tokens
+    output_tokens = response.usage.completion_tokens
+    return (input_tokens * 0.01) + (output_tokens * 0.03)",5,"The function correctly separates input and output tokens and applies the respective rates for each, adhering to the criteria.",Draw
+16,AI Business Logic & API Design,"```python
+from functools import wraps
+import asyncio
+
+def cache_llm_summary(max_age=3600):
+    cache = {}
+    
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            key = args + tuple(kwargs.items())
+            if key in cache and time.time() - cache[key]['timestamp'] < max_age:
+                return cache[key]['result']
+            
+            result = await func(*args, **kwargs)
+            cache[key] = {'result': result, 'timestamp': time.time()}
+            return result
+        
+        return wrapper
+    
+    return decorator
+
+# Example usage
+@cache_llm_summary(max_age=3600)
+async def summarize_medical_record(record_id: int) -> str:
+    # Simulate slow LLM call
+    await asyncio.sleep(5)
+    return f""Summary of record {record_id}""
+```
+
+This code defines a `cache_llm_summary` decorator that caches the results of the `summarize_medical_record` function based on its arguments. The cache has a maximum age after which entries expire. If a cached result is available and still valid, it is returned immediately instead of re-executing the function.",1,"The code uses an in-memory cache instead of Redis, violating the criteria to avoid `@lru_cache` and use Redis for shared storage across workers.","@cache
+def summarize_medical_record(self, medical_record):
+    """"""Summarize a patient's medical record.""""""
+    prompt = f""Please summarize the following medical record:\n\n{medical_record}\n""
+    response = self.generate_text(prompt)
+    return response",1,"The code uses an undefined @cache decorator and lacks Redis implementation, violating the criteria of using Redis for caching with user context in the key.",Draw
+17,AI Business Logic & API Design,"from fastapi import FastAPI
+from sentence_transformers import SentenceTransformer
+import numpy as np
+
+app = FastAPI()
+
+model = SentenceTransformer('all-MiniLM-L6-v2')
+
+@app.post(""/embed/"")
+async def get_embedding(sentence: str) -> dict:
+    with model.encode(sentence, convert_to_numpy=True) as embedding:
+        return {""embedding"": embedding.tolist()}",2,"The use of 'with' is incorrect for model.encode, which does not return a context manager. The code should directly call model.encode and convert the result to a list.","@router.get('/sentence_embedding')
+def get_sentence_embedding(sentence: str):
+    """"""Get the embedding of a sentence.""""""
+    return {'embedding': st_model.encode(sentence).tolist()}",5,"The code correctly converts the numpy.ndarray to a list using .tolist() before returning it in the HTTP response, adhering to the serialization requirement.",LoRA Win
+18,AI Business Logic & API Design,"```python
+import pytest
+from fastapi.testclient import TestClient
+from your_fastapi_app import app  # Replace with the actual path to your FastAPI app
+
+@pytest.fixture(scope=""module"")
+def client():
+    with TestClient(app) as client:
+        yield client
+
+async def test_chat_endpoint(client):
+    response = client.post(""/chat"", json={""message"": ""Hello, how can I help you?""})
+    assert response.status_code == 200
+    assert isinstance(response.json(), dict)
+    assert ""text"" in response.json()
+```
+
+Make sure to replace `""your_fastapi_app""` with the actual path to your FastAPI application file. This test checks if the `/chat` endpoint returns a 200 status code and that the response contains a JSON object with a key `""text""`.",2,"The test does not mock the external LLM Provider and lacks a failure edge-case test, such as simulating a Provider Timeout or Rate Limit.","def test_chat(self):
+    """"""Test /chat endpoint.""""""
+    response = self.client.post('/chat', json={'message': 'Hello'})
+    assert response.status_code == 200
+    assert response.json()['text'] == 'Hi there!'",1,The test does not mock the external LLM Provider and only tests the happy path without any failure edge-case scenarios.,LoRA Lose
+19,AI Business Logic & API Design,"from fastapi import FastAPI, Depends
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+
+app = FastAPI()
+
+DATABASE_URL = ""postgresql+asyncpg://user:password@localhost/dbname""
+engine = create_async_engine(DATABASE_URL, echo=True)
+AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+async def get_db():
+    async with AsyncSessionLocal() as db:
+        yield db
+
+@app.get(""/health"")
+async def health_check(db: AsyncSession = Depends(get_db)):
+    try:
+        await db.execute(""SELECT 1"")
+        return {""status"": ""healthy""}
+    except Exception as e:
+        return {""status"": ""unhealthy"", ""error"": str(e)}",5,"The code correctly implements a minimal FastAPI endpoint to check server health by executing 'SELECT 1' using a session, without overengineering.","@router.get('/health')
+def health_check(db: Session=Depends(get_db)):
+    result = db.execute(text('SELECT 1'))
+    return {'status': 'success'}",4,"The code correctly implements a minimal health check endpoint using a database session, but it lacks error handling for database connection issues.",LoRA Lose
+20,Concurrency & Event Loop,"from fastapi import FastAPI, HTTPException
+from transformers import AutoTokenizer
+import asyncio
+
+app = FastAPI()
+
+tokenizer = AutoTokenizer.from_pretrained(""bert-base-uncased"")
+
+async def count_tokens(text: str) -> int:
+    return len(tokenizer.tokenize(text))
+
+@app.post(""/count-tokens/"")
+async def count_tokens_endpoint(text: str):
+    if not text:
+        raise HTTPException(status_code=400, detail=""Text cannot be empty"")
+    
+    token_count = await count_tokens(text)
+    return {""token_count"": token_count}",2,"The tokenization process is CPU-bound and should be offloaded to a background thread using asyncio.to_thread or ThreadPoolExecutor, which is not implemented here, potentially blocking the FastAPI event loop.","@router.post('/token_count')
+async def token_count(text: str):
+    """"""Count number of tokens in text.""""""
+    tokenizer = AutoTokenizer.from_pretrained('gpt2')
+    return {'num_tokens': len(tokenizer.encode(text))}",2,"The code does not push the CPU-bound tokenization task to a background thread, which can block the FastAPI event loop and affect handling of concurrent requests.",Draw
+21,Resource Management & Streaming,"from fastapi import FastAPI, Request, Response
+from fastapi.responses import StreamingResponse
+import asyncio
+
+app = FastAPI()
+
+async def llm_stream_generator(llm_client, prompt):
+    try:
+        async for chunk in llm_client.stream(prompt):
+            yield f""data: {chunk}\n\n""
+    except Exception as e:
+        yield f""data: Error: {str(e)}\n\n""
+
+@app.post(""/stream"")
+async def stream_llm_response(request: Request, prompt: str):
+    llm_client = get_llm_client()  # Assume this function initializes your LLM client
+    return StreamingResponse(llm_stream_generator(llm_client, prompt), media_type=""text/event-stream"")
+
+def get_llm_client():
+    # Initialize and return your LLM client here
+    pass
+
+# To optimize resources when the user closes the tab, handle the connection close event
+@app.on_event(""shutdown"")
+async def shutdown_event():
+    # Perform cleanup tasks here, such as closing connections or releasing resources
+    pass
+
+# Optionally, you can also handle the client disconnecting during streaming
+@app.exception_handler(Disconnect)
+async def client_disconnected_exception_handler(request: Request, exc: Disconnect):
+    # Handle client disconnection gracefully, e.g., stop streaming
+    return Response(status_code=200)",2,"The generator does not await request.is_disconnected() between each yield, which is crucial for handling client disconnections and optimizing resources.","def stream_text(self):
+    """"""Stream text results from vLLM to client.""""""
+    try:
+        for chunk in self._stream():
+            yield {'data': chunk}
+    except RuntimeError as e:
+        logger.error(f'RuntimeError: {e}')
+        raise fastapi.HTTPException(status_code=500, detail=str(e)) from None
+    finally:
+        self._stop()",1,"The code does not await `request.is_disconnected()` between each yield, nor does it handle client disconnection to break the loop, violating the criteria.",LoRA Lose
+22,Model Inference & Optimization,"```python
+import asyncio
+
+async def generate_text(prompt):
+    # Simulate an asynchronous inference call
+    await asyncio.sleep(0.1)  # Replace with actual inference call
+    return f""Generated text for {prompt}""
+
+async def process_prompts(prompts):
+    tasks = [generate_text(prompt) for prompt in prompts]
+    results = await asyncio.gather(*tasks)
+    return results
+
+# Example usage
+prompts = [f""Prompt {i}"" for i in range(100)]
+results = asyncio.run(process_prompts(prompts))
+print(results)
+```",2,"The code uses `asyncio.gather` to open 100 parallel coroutines, which violates the criteria of avoiding this method to prevent OOM issues. It also does not pass the array of prompts directly to the engine's generate function for batching.","async def get_all_prompts(prompts):
+    results = await inference_engine.generate_text(prompts)
+    return results",5,"The code correctly passes the array of 100 prompts directly to the inference engine's generate function, adhering to the criteria of avoiding `asyncio.gather` and allowing the engine to handle batching internally.",LoRA Win
+23,Application Architecture & Lifespan,"```python
+from fastapi import FastAPI
+from transformers import pipeline
+
+app = FastAPI()
+
+@app.post(""/infer"")
+async def infer(prompt: str):
+    generator = pipeline('text-generation')
+    result = await generator(prompt, max_length=50)
+    return {""generated_text"": result[0]['generated_text']}
+```",1,"The model is instantiated inside the route handler, violating the requirement to load it once in the lifespan context manager and store it in app.state.","def main():
+    app = fastapi.FastAPI()
+    @app.get('/infer')
+    def infer(prompt):
+        return {'result': pipeline('text-generation')(prompt=prompt)[0]['generated_text']}
+    uvicorn.run(app)",1,"The code does not use the lifespan context manager to load the model, and it instantiates the model inside the route handler, violating the criteria.",Draw
+24,GPU Memory Management,"```python
+import torch
+
+def batch_inference(model, input_texts, batch_size=8):
+    model.eval()
+    device = next(model.parameters()).device
+    
+    for i in range(0, len(input_texts), batch_size):
+        batch_texts = input_texts[i:i + batch_size]
+        with torch.no_grad():
+            outputs = model(batch_texts)
+        
+        # Clear cache after each batch to free up VRAM
+        torch.cuda.empty_cache()
+
+# Example usage
+model = torch.load('path_to_model.pth')
+input_texts = ['text1', 'text2', 'text3', 'text4', 'text5']
+batch_inference(model, input_texts)
+```",2,"The code incorrectly uses torch.cuda.empty_cache() within the inference loop, which is explicitly forbidden by the criteria. It correctly uses torch.no_grad() but fails to manage VRAM without disrupting the Caching Allocator.","for i, batch in enumerate(data_loader):
+    with torch.no_grad():
+        outputs = model.generate(**batch)
+    del outputs
+    torch.cuda.empty_cache()",2,"The code correctly uses `torch.no_grad()` and deletes `outputs`, but it violates the criteria by using `torch.cuda.empty_cache()` within the loop.",Draw
+25,Data Processing & RAG,"```python
+import tiktoken
+
+def prepare_context_for_gpt(text: str) -> str:
+    encoding = tiktoken.get_encoding(""cl100k_base"")
+    max_tokens = 2000
+    tokens = encoding.encode_untokenized(text)
+    
+    if len(tokens) > max_tokens:
+        truncated_tokens = tokens[:max_tokens]
+        return encoding.decode(truncated_tokens)
+    
+    return text
+```",2,"The code uses a non-existent method 'encode_untokenized' instead of the correct 'encode' method, leading to a potential error. Additionally, it does not handle Unicode safety explicitly during decoding.","def prepare_context(self, text):
+    if len(text) > self.model.config.max_position_embeddings - 2:
+        text = text[:self.model.config.max_position_embeddings - 2]
+    return [self.tokenizer.encode(text, add_special_tokens=False)]",2,"The code incorrectly uses string slicing instead of token-based truncation, violating the criteria of handling tokens rather than characters.",Draw
+26,Vector Database,"from typing import List
+import numpy as np
+
+def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
+    dot_product = np.dot(vec1, vec2)
+    norm_vec1 = np.linalg.norm(vec1)
+    norm_vec2 = np.linalg.norm(vec2)
+    return dot_product / (norm_vec1 * norm_vec2)",2,"The code defines a cosine similarity function but does not normalize the embedding vector to unit length before querying, which is required to use dot product for cosine similarity.","def query(self, text):
+    """"""Query the database with a given text.""""""
+    embed = self.model.encode(text)
+    embed = embed / np.linalg.norm(embed)
+    results = self.vector_database.query(embed, algorithm='DotProduct', metric='Cosine')
+    return results",5,"The code correctly normalizes the embedding vector to unit length using L2 norm before querying, ensuring that the Dot Product algorithm can be used to measure Cosine Similarity.",LoRA Win
+27,API Optimization,"```python
+import asyncio
+from openai import AsyncClient
+import pinecone
+
+async def get_embeddings(documents):
+    client = AsyncClient()
+    response = await client.embeddings.create(
+        input=documents,
+        model=""text-embedding-ada-002""
+    )
+    return response.data
+
+async def load_to_pinecone(embeddings, index_name):
+    pinecone.init(api_key='your_api_key', environment='us-west1-gcp')
+    index = pinecone.Index(index_name)
+    batch_size = 100
+    for i in range(0, len(embeddings), batch_size):
+        batch = embeddings[i:i + batch_size]
+        index.upsert(vectors=batch)
+
+async def main():
+    documents = [""Document 1"", ""Document 2"", ..., ""Document 500""]  # Replace with your actual documents
+    embeddings = await get_embeddings(documents)
+    await load_to_pinecone(embeddings, 'my_index')
+
+# Run the main function
+asyncio.run(main())
+```
+
+Make sure to replace `'your_api_key'` with your actual OpenAI API key and `'my_index'` with the name you want to give to your Pinecone index. Adjust the `batch_size` if needed based on your Pinecone plan limits.",4,"The code correctly avoids using a for loop for API calls and handles documents in bulk, but it lacks error handling and does not check for API rate limits or chunk size constraints.","async def main():
+    client = openai.AsyncClient()
+    pinecone.init(api_key='YOUR_API_KEY', environment='YOUR_ENVIRONMENT')
+    index_name = 'your_pinecone_index'
+    index = pinecone.Index(index_name)
+    texts = [doc.text for doc in docs]
+    response = await client.embeddings.create(input=texts, model='text-embedding-ada-002')
+    data = [{'id': str(uuid.uuid4()), 'values': emb['embedding'], 'metadata': {'text': texts[i]}} for i, emb in enumerate(response.data)]
+    index.upsert(vectors=data)",4,"The code correctly uses the OpenAI API to get embeddings for multiple documents without a for loop, but it lacks error handling and does not ensure the list size is within API limits.",Draw
+28,LLM Output Parsing,"import json
+
+def parse_llm_json(llm_result: str) -> dict:
+    # Remove the JSON markers if present
+    cleaned_result = llm_result.strip().strip('`').replace('```json', '').replace('```', '')
+    
+    try:
+        return json.loads(cleaned_result)
+    except json.JSONDecodeError as e:
+        raise ValueError(f""Failed to decode JSON: {e}"") from e",3,The code attempts to remove markdown code blocks but does not correctly handle cases where ```json and ``` are not at the start or end of the string.,"def _process_llm_result(self, llm_output: str) -> dict[str, Any]:
+    json_str = llm_output.split('```json\n')[1].split('\n```')[0]
+    return json.loads(json_str)",3,"The code assumes the JSON is always correctly enclosed within markdown code blocks, which may not handle cases where the format is slightly different or missing.",Draw
+29,Agentic Workflows,"```python
+import asyncio
+
+async def react_agent(llm_model, prompt):
+    while True:
+        response = await llm_model(prompt)
+        if response.startswith('Action:'):
+            return response
+        else:
+            prompt = f""Please yield to the tool. {response}""
+
+# Example usage with a hypothetical LLM model
+class HypotheticalLLMModel:
+    async def __call__(self, prompt):
+        # Simulate LLM response
+        return ""Action: SearchDatabase""
+
+llm_model = HypotheticalLLMModel()
+
+async def main():
+    result = await react_agent(llm_model, ""What should we do next?"")
+    print(result)
+
+# Run the example
+asyncio.run(main())
+```
+
+Parameters to configure to prevent the agent from answering itself:
+1. **Prompt Engineering**: Ensure the initial prompt clearly instructs the LLM to yield to the tool when necessary.
+2. **Feedback Loop**: Implement a feedback loop where the agent checks if its response starts with 'Action:' before returning it. If not, it prompts the LLM again to yield to the tool.
+3. **Timeout Mechanism**: Optionally, implement a timeout mechanism to force the agent to yield after a certain period if no action command is detected.
+
+These configurations help ensure that the agent consistently yields to the tools rather than responding directly.",2,"The code does not include the critical 'stop' parameter in the inference configuration, which is necessary to prevent the LLM from continuing to generate text instead of yielding control.","def react_agent(self, prompt: str, history: list[tuple[str, str]], stop: Optional[list[str]]=None):
+    """"""The agent that calls the LLM.""""""
+    inputs = self.tokenizer.apply_chat_formatting([(QA_SPECIAL_TOKENS['Question'], prompt)], return_tensors='pt')
+    outputs = self.model.generate(**inputs, pad_token_id=self.tokenizer.eos_token_id)
+    answer = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+    return f'Action: {answer}'",2,"The code does not pass the required `stop` parameter to the model's generation method, which is crucial for preventing the LLM from answering itself instead of yielding to the tool.",Draw
+30,LLM Output Parsing,"import json
+from typing import Any
+
+class PartialJSONDecoder(json.JSONDecoder):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, object_hook=self.object_hook, **kwargs)
+        self._partial = """"
+
+    def decode(self, s, _w=json.decoder.WHITESPACE.match):
+        s_len = len(s)
+
+        if self._partial:
+            s = self._partial + s
+            self._partial = """"
+
+        end = 0
+        while end < s_len:
+            obj, end = self.raw_decode(s, idx=_w(s, end).end())
+            yield obj
+            if end == s_len:
+                break
+            elif s[end] != "","":
+                raise ValueError(""Expecting ',' delimiter"")
+            end += 1
+
+        if end < s_len:
+            self._partial = s[end:]
+
+def parse_json_stream(stream: str) -> Any:
+    decoder = PartialJSONDecoder()
+    return list(decoder.decode(stream))",2,"The code attempts to implement a custom partial JSON decoder but has major flaws, such as incorrect handling of JSON arrays and objects, and it does not properly accumulate and parse JSON chunks.","def _parse_json(self):
+    while True:
+        chunk = self._read_chunk()
+        if chunk is None:
+            break
+        try:
+            json_data = json.loads(chunk)
+            yield json_data
+        except json.JSONDecodeError:
+            continue",2,"The code directly applies `json.loads()` on individual chunks, violating the criteria. It lacks a text accumulation mechanism and does not handle partial JSON parsing correctly.",Draw
