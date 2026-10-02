@@ -1,0 +1,37 @@
+services:
+  vllm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vllm
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      CUDA_VISIBLE_DEVICES: ${DEVICE_ID:-0}
+      NVIDIA_VISIBLE_DEVICES: ${DEVICE_ID:-0}
+      VLLM_ALLOW_RUNTIME_LORA_UPDATING: "True"
+    ports:
+      - "${VLLM_PORT:-8000}:${VLLM_PORT:-8000}"
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+      - vllm_cache:/root/.cache/vllm
+    networks:
+      - network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -H \"Authorization: Bearer ${VLLM_API_KEY}\" http://localhost:${VLLM_PORT:-8000}/v1/models >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+
+volumes:
+  huggingface_cache:
+  vllm_cache:
+
+networks:
+  network:
