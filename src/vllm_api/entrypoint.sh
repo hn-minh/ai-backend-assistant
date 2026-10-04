@@ -9,7 +9,7 @@ if [ -z "$PYTHON_CMD" ]; then
 fi
 
 BASE_MODEL=${BASE_MODEL:-Qwen/Qwen2.5-Coder-7B-Instruct}
-SERVED_MODEL_NAME=${SERVED_MODEL_NAME:-base-model}
+SERVED_MODEL_NAME=${SERVED_MODEL_NAME:-routing-classifier}
 PORT=${VLLM_PORT:-8000}
 
 echo "Starting vLLM with base model: $BASE_MODEL"
@@ -24,7 +24,7 @@ echo "Starting vLLM with base model: $BASE_MODEL"
   --max-model-len 8192 \
   --gpu-memory-utilization 0.9 \
   --enable-prefix-caching \
-  --max-loras 2 \
+  --max-loras 2 &
 
 VLLM_PID=$!
 
