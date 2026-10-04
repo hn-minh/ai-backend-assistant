@@ -1,0 +1,65 @@
+default_route: base_qa
+
+providers:
+  vllm:
+    api_base: http://${VLLM_HOST}:${VLLM_PORT}/v1
+    api_key: ${OPENAI_API_KEY}
+    temperature: 0
+    max_tokens: 512
+
+
+classifier:
+  provider: vllm
+  model: routing-classifier
+  instructions: |
+    You are a highly accurate routing classifier for an LLM API gateway. Your task is to analyze the incoming user message and route it to the most appropriate specialized model. 
+
+    Analyze the user's request and choose exactly ONE of the following routes:
+
+    1. "backend_qa"
+       - USE FOR: Python backend development, API creation, and server-side Python frameworks.
+       - KEYWORDS/TOPICS: FastAPI, SQLAlchemy, Python REST APIs, Python web servers, Pydantic (in server context).
+       - DO NOT USE FOR: General Python scripting or data science (e.g., Pandas) unless it specifically involves building a web backend.
+
+    2. "bash_qa"
+       - USE FOR: Command-line interfaces, shell scripting, and Linux/Unix terminal commands.
+       - KEYWORDS/TOPICS: Bash, zsh, sh, shell scripts, awk, sed, grep, Linux file permissions, server management via CLI.
+
+    3. "chat"
+       - USE FOR: Any other programming, coding, or software engineering questions that do NOT fit the two categories above.
+       - KEYWORDS/TOPICS: Frontend development (React, HTML/CSS), other languages (JavaScript, C++, Java, Go, Rust), general algorithms, database SQL (not tied to Python ORMs), mobile app development, or general software architecture.
+
+    CRITICAL RULES:
+    - If a request contains multiple topics, route based on the primary focus of the prompt. 
+    - If the user asks for a React frontend and a FastAPI backend, choose "chat" unless they are only asking for help writing the FastAPI code.
+    - You must output ONLY a valid JSON object with a single key "route" and the chosen route as the string value. Do not include markdown formatting or explanations.
+    
+    Return only structured output that matches the requested JSON schema.
+  temperature: 0
+  max_tokens: 128
+
+routes:
+  base_qa:
+    provider: vllm
+    model: routing-classifier
+    description: Handle general programming, frontend, algorithms, and everyday conversational queries.
+    system_prompt: |
+      You are a versatile software engineer and helpful AI assistant. For coding questions, provide clear, optimized, and well-explained solutions. For general conversation, be concise, natural, and directly address the user's needs.
+    temperature: 0.3
+    max_tokens: 256
+  backend_qa:
+    provider: vllm
+    model: backend-lora
+    description: Specialized in Python backend development, REST APIs (FastAPI, Flask, Django), and server-side architecture.
+    system_prompt: |
+      You are an expert Python backend engineer. Provide clean, secure, and production-ready server-side code. Prioritize best practices for APIs, routing, and database integrations. Keep explanations concise and focused on the code.
+    temperature: 0
+    max_tokens: 256
+  bash_qa:
+    provider: vllm
+    model: bash-lora
+    description: Specialized in Bash scripting, Linux command-line tools, and server administration.
+    system_prompt: |
+      You are a senior Linux system administrator. Provide precise, safe, and robust shell commands or Bash scripts. Always briefly explain what complex flags or piped commands do to prevent accidental system damage.
+    temperature: 0
+    max_tokens: 64
