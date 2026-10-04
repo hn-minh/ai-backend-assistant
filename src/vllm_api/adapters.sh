@@ -26,3 +26,5 @@ load_adapter() {
 }
 
 load_adapter "backend-lora" "${BACKEND_LORA_REPO:-hn-minh/Qwen2.5-Coder-7B-Instruct-backend-LoRA}"
+
+load_adapter "bash-lora" "${BASH_LORA_REPO:-hn-minh/Qwen2.5-Coder-7B-Instruct-bash-LoRA}"
