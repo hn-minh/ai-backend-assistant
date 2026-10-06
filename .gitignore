@@ -15,6 +15,7 @@ wheels/
 data/raw/
 data/processed/
 *.jsonl
+*.json
 
 unsloth_compiled_cache/
 artifacts/
