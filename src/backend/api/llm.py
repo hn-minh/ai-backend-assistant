@@ -1,15 +1,16 @@
-import hashlib
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
+from time import perf_counter
 from typing import Callable, Sequence
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel
 from langsmith import traceable
+from prometheus_client import Counter, Histogram
+from pydantic import BaseModel
 
 from core.config import get_settings
 from core.routing import ProviderConfig, RouteConfig, RoutingConfig, get_routing_config
@@ -17,6 +18,23 @@ from core.routing import ProviderConfig, RouteConfig, RoutingConfig, get_routing
 
 RouteClassifier = Callable[[Sequence[dict[str, str]]], dict[str, str] | str]
 RouteInvoker = Callable[[RouteConfig, ProviderConfig, Sequence[dict[str, str]]], str]
+
+
+ROUTED_REQUESTS = Counter(
+    "llm_gateway_routed_requests_total",
+    "Total LLM gateway requests by route and provider.",
+    ["route", "provider", "model"],
+)
+ROUTED_LATENCY = Histogram(
+    "llm_gateway_route_latency_seconds",
+    "Latency for routed LLM requests.",
+    ["route", "provider", "model"],
+)
+CLASSIFICATIONS = Counter(
+    "llm_gateway_classifications_total",
+    "Total classifier decisions emitted by the gateway.",
+    ["route", "classifier_model"],
+)
 
 
 class RouteDecision(BaseModel):
@@ -43,11 +61,6 @@ def _normalize_messages(messages: Sequence[dict[str, str]]) -> list[dict[str, st
             continue
         normalized.append({"role": role, "content": content})
     return normalized
-
-
-def _hash_payload(payload: dict[str, object]) -> str:
-    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def _to_langchain_messages(messages: Sequence[dict[str, str]]):
@@ -85,6 +98,7 @@ def _extract_route_from_output(raw_output: str, allowed_routes: set[str]) -> str
     if not cleaned:
         return None
 
+    # Prefer JSON route extraction when the model returns JSON-like content.
     try:
         parsed = json.loads(cleaned)
         if isinstance(parsed, dict):
@@ -94,6 +108,7 @@ def _extract_route_from_output(raw_output: str, allowed_routes: set[str]) -> str
     except Exception:
         pass
 
+    # Common fallback: model returns just the route token or a sentence containing it.
     for route_name in sorted(allowed_routes, key=len, reverse=True):
         if cleaned == route_name:
             return route_name
@@ -157,6 +172,12 @@ class LLMGateway:
         if eligible_routes:
             return eligible_routes
         return self.routing_config.routes
+
+    def _record_request_metrics(self, result: RoutedLLMResult, used_classifier: bool, duration: float) -> None:
+        if used_classifier:
+            CLASSIFICATIONS.labels(result.route, self.routing_config.classifier.model).inc()
+        ROUTED_REQUESTS.labels(result.route, result.provider, result.model).inc()
+        ROUTED_LATENCY.labels(result.route, result.provider, result.model).observe(duration)
 
     @traceable(name="gateway_classify", run_type="chain")
     def classify(self, messages: Sequence[dict[str, str]]) -> RouteDecision:
@@ -239,7 +260,7 @@ class LLMGateway:
                 reason=f"Classifier returned unknown route '{normalized.route}', default applied",
             )
         return normalized
-        
+
     @traceable(name="gateway_invoke", run_type="llm")
     def invoke_route(
         self,
@@ -271,6 +292,9 @@ class LLMGateway:
         if not messages:
             raise ValueError("At least one message is required")
 
+        start_time = perf_counter()
+        used_classifier = requested_route is None
+
         if requested_route:
             decision = RouteDecision(route=requested_route, reason="Route forced by request")
         else:
@@ -288,7 +312,7 @@ class LLMGateway:
         provider = self.routing_config.providers[route_config.provider]
         content = self.invoke_route(route_config, provider, messages)
         
-        return RoutedLLMResult(
+        result = RoutedLLMResult(
             content=content,
             route=route_name,
             provider=route_config.provider,
@@ -296,6 +320,10 @@ class LLMGateway:
             classifier_model=self.routing_config.classifier.model,
             reason=decision.reason,
         )
+
+        duration = perf_counter() - start_time
+        self._record_request_metrics(result, used_classifier, duration)
+        return result
 
 
 def get_gateway() -> LLMGateway:

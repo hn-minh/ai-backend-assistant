@@ -3,6 +3,7 @@ fastapi==0.141.1
 pydantic-settings==2.15.0
 python-dotenv==1.2.3
 pyyaml==6.0.3
+prometheus-fastapi-instrumentator==8.1.0
 prometheus-client==0.26.0
 langsmith==0.14.4
 langchain-openai==1.6.7

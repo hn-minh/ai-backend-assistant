@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+from prometheus_fastapi_instrumentator import Instrumentator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from core.config import get_settings
@@ -29,3 +30,5 @@ def read_root():
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
+
+Instrumentator().instrument(app).expose(app)

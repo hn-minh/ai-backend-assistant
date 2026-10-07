@@ -1,0 +1,36 @@
+services:
+  prometheus:
+    build: 
+      context: ./prometheus
+      dockerfile: Dockerfile
+    container_name: prometheus
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "9090:9090"
+    volumes:
+      - prometheus-storage:/prometheus
+    networks:
+      - main-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    volumes:
+      - grafana-storage:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - main-network
+
+networks:
+  main-network:
+    external: true
+
+volumes:
+  prometheus-storage:
+  grafana-storage:
