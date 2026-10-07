@@ -17,7 +17,7 @@ services:
       - huggingface_cache:/root/.cache/huggingface
       - vllm_cache:/root/.cache/vllm
     networks:
-      - network
+      - main-network
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS -H \"Authorization: Bearer ${VLLM_API_KEY}\" http://localhost:${VLLM_PORT:-8000}/v1/models >/dev/null"]
       interval: 30s
@@ -36,4 +36,5 @@ volumes:
   vllm_cache:
 
 networks:
-  network:
+  main-network:
+    external: true
