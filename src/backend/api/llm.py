@@ -9,6 +9,7 @@ from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
+from langsmith import traceable
 
 from core.config import get_settings
 from core.routing import ProviderConfig, RouteConfig, RoutingConfig, get_routing_config
@@ -157,6 +158,7 @@ class LLMGateway:
             return eligible_routes
         return self.routing_config.routes
 
+    @traceable(name="gateway_classify", run_type="chain")
     def classify(self, messages: Sequence[dict[str, str]]) -> RouteDecision:
         if self._classifier_override is not None:
             return self._normalize_decision(self._classifier_override(messages))
@@ -237,7 +239,8 @@ class LLMGateway:
                 reason=f"Classifier returned unknown route '{normalized.route}', default applied",
             )
         return normalized
-
+        
+    @traceable(name="gateway_invoke", run_type="llm")
     def invoke_route(
         self,
         route_config: RouteConfig,
