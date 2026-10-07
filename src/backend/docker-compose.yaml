@@ -1,0 +1,23 @@
+services:
+  backend:
+    build:
+      context: .
+    image: llm-backend:latest
+    container_name: llm-backend
+    restart: unless-stopped
+    command: ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${BACKEND_PORT:-8001}"]
+    ports:
+      - "${BACKEND_PORT:-8001}:${BACKEND_PORT:-8001}"
+    env_file:
+      - .env
+    networks:
+      - main-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:${BACKEND_PORT:-8001}/health >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  main-network:
+    external: true
