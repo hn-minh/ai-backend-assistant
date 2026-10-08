@@ -7,4 +7,5 @@ prometheus-fastapi-instrumentator==8.1.0
 prometheus-client==0.26.0
 langsmith==0.14.4
 langchain-openai==1.6.7
+redis==8.1.0
 requests==2.34.2

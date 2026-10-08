@@ -21,6 +21,13 @@ class Settings(BaseSettings):
         alias="ROUTING_CONFIG_PATH",
     )
     request_timeout_seconds: int = Field(default=120, alias="REQUEST_TIMEOUT_SECONDS")
+    cache_enabled: bool = Field(default=False, alias="CACHE_ENABLED")
+    cache_redis_url: str | None = Field(default=None, alias="CACHE_REDIS_URL")
+    cache_namespace: str = Field(default="default", alias="CACHE_NAMESPACE")
+    classifier_cache_enabled: bool = Field(default=True, alias="CLASSIFIER_CACHE_ENABLED")
+    response_cache_enabled: bool = Field(default=True, alias="RESPONSE_CACHE_ENABLED")
+    cache_ttl_seconds: int | None = Field(default=None, alias="CACHE_TTL_SECONDS")
+    cache_socket_timeout_seconds: int = Field(default=2, alias="CACHE_SOCKET_TIMEOUT_SECONDS")
     app_title: str = "LLM Gateway Service"
     app_description: str = "Config-driven FastAPI gateway for routed LLM serving"
     version: str = "1.0.0"

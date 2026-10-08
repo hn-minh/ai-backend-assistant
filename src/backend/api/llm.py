@@ -1,6 +1,8 @@
+import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from functools import lru_cache
 from time import perf_counter
 from typing import Callable, Sequence
 
@@ -13,7 +15,8 @@ from prometheus_client import Counter, Histogram
 from pydantic import BaseModel
 
 from core.config import get_settings
-from core.routing import ProviderConfig, RouteConfig, RoutingConfig, get_routing_config
+from core.cache import CacheBackend, NullCacheBackend, build_cache_backend
+from core.routing import ProviderConfig, RouteConfig, RoutingConfig, get_routing_config, get_routing_config_fingerprint
 
 
 RouteClassifier = Callable[[Sequence[dict[str, str]]], dict[str, str] | str]
@@ -34,6 +37,11 @@ CLASSIFICATIONS = Counter(
     "llm_gateway_classifications_total",
     "Total classifier decisions emitted by the gateway.",
     ["route", "classifier_model"],
+)
+CACHE_OPERATIONS = Counter(
+    "llm_gateway_cache_operations_total",
+    "Cache operations performed by the LLM gateway.",
+    ["cache", "result"],
 )
 
 
@@ -61,6 +69,11 @@ def _normalize_messages(messages: Sequence[dict[str, str]]) -> list[dict[str, st
             continue
         normalized.append({"role": role, "content": content})
     return normalized
+
+
+def _hash_payload(payload: dict[str, object]) -> str:
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def _to_langchain_messages(messages: Sequence[dict[str, str]]):
@@ -98,7 +111,6 @@ def _extract_route_from_output(raw_output: str, allowed_routes: set[str]) -> str
     if not cleaned:
         return None
 
-    # Prefer JSON route extraction when the model returns JSON-like content.
     try:
         parsed = json.loads(cleaned)
         if isinstance(parsed, dict):
@@ -108,7 +120,6 @@ def _extract_route_from_output(raw_output: str, allowed_routes: set[str]) -> str
     except Exception:
         pass
 
-    # Common fallback: model returns just the route token or a sentence containing it.
     for route_name in sorted(allowed_routes, key=len, reverse=True):
         if cleaned == route_name:
             return route_name
@@ -117,6 +128,7 @@ def _extract_route_from_output(raw_output: str, allowed_routes: set[str]) -> str
     return None
 
 
+@lru_cache(maxsize=32)
 def _build_chat_model(
     api_base: str,
     api_key: str,
@@ -142,11 +154,14 @@ class LLMGateway:
         routing_config: RoutingConfig | None = None,
         classifier: RouteClassifier | None = None,
         invoker: RouteInvoker | None = None,
+        cache_backend: CacheBackend | None = None,
     ):
         self.settings = settings or get_settings()
         self.routing_config = routing_config or get_routing_config()
         self._classifier_override = classifier
         self._invoker_override = invoker
+        self._cache_backend = cache_backend or build_cache_backend(self.settings)
+        self._routing_fingerprint = get_routing_config_fingerprint(self.routing_config)
 
     def _get_model(self, provider: ProviderConfig, model: str, temperature: float, max_tokens: int) -> ChatOpenAI:
         return _build_chat_model(
@@ -163,6 +178,31 @@ class LLMGateway:
             return RouteDecision(route=decision, reason="Provided by classifier override")
         return RouteDecision.model_validate(decision)
 
+    def _cache_enabled(self, feature_enabled: bool) -> bool:
+        return feature_enabled and not isinstance(self._cache_backend, NullCacheBackend)
+
+    def _cache_get(self, cache_name: str, key: str) -> str | None:
+        try:
+            cached_value = self._cache_backend.get(key)
+        except Exception:
+            CACHE_OPERATIONS.labels(cache_name, "error").inc()
+            return None
+
+        if cached_value is None:
+            CACHE_OPERATIONS.labels(cache_name, "miss").inc()
+            return None
+
+        CACHE_OPERATIONS.labels(cache_name, "hit").inc()
+        return cached_value
+
+    def _cache_set(self, cache_name: str, key: str, value: str) -> None:
+        try:
+            self._cache_backend.set(key, value)
+        except Exception:
+            CACHE_OPERATIONS.labels(cache_name, "error").inc()
+            return
+        CACHE_OPERATIONS.labels(cache_name, "store").inc()
+
     def _eligible_routes(self) -> dict[str, RouteConfig]:
         eligible_routes = {
             route_name: route_config
@@ -172,6 +212,27 @@ class LLMGateway:
         if eligible_routes:
             return eligible_routes
         return self.routing_config.routes
+
+    def _response_cache_key(self, messages: Sequence[dict[str, str]], requested_route: str | None) -> str:
+        return f"response:{_hash_payload({
+            'namespace': self.settings.cache_namespace,
+            'routing_fingerprint': self._routing_fingerprint,
+            'requested_route': requested_route or 'auto',
+            'messages': _normalize_messages(messages),
+        })}"
+
+    def _classifier_cache_key(self, messages: Sequence[dict[str, str]]) -> str:
+        classifier_config = self.routing_config.classifier
+        eligible_routes = self._eligible_routes()
+        return f"classifier:{_hash_payload({
+            'namespace': self.settings.cache_namespace,
+            'routing_fingerprint': self._routing_fingerprint,
+            'messages': _normalize_messages(messages),
+            'classifier': classifier_config.model_dump(mode='json'),
+            'eligible_routes': {
+                route_name: route_config.description for route_name, route_config in eligible_routes.items()
+            },
+        })}"
 
     def _record_request_metrics(self, result: RoutedLLMResult, used_classifier: bool, duration: float) -> None:
         if used_classifier:
@@ -294,11 +355,37 @@ class LLMGateway:
 
         start_time = perf_counter()
         used_classifier = requested_route is None
+        if self._cache_enabled(self.settings.response_cache_enabled):
+            response_cache_key = self._response_cache_key(messages, requested_route)
+            cached_result = self._cache_get("response", response_cache_key)
+            if cached_result is not None:
+                result = RoutedLLMResult(**json.loads(cached_result))
+                duration = perf_counter() - start_time
+                self._record_request_metrics(result, used_classifier, duration)
+                return result
+        else:
+            response_cache_key = None
 
         if requested_route:
             decision = RouteDecision(route=requested_route, reason="Route forced by request")
         else:
-            decision = self.classify(messages)
+            decision = None
+            classifier_cache_key = None
+            if self._cache_enabled(self.settings.classifier_cache_enabled):
+                classifier_cache_key = self._classifier_cache_key(messages)
+                cached_decision = self._cache_get("classifier", classifier_cache_key)
+                if cached_decision is not None:
+                    decision = RouteDecision.model_validate_json(cached_decision)
+
+            if decision is None:
+                decision = self.classify(messages)
+                if (
+                    classifier_cache_key is not None
+                    and decision.route in self.routing_config.routes
+                    and "fallback" not in decision.reason.lower()
+                    and "default applied" not in decision.reason.lower()
+                ):
+                    self._cache_set("classifier", classifier_cache_key, decision.model_dump_json())
 
         route_name = decision.route
         if route_name not in self.routing_config.routes:
@@ -311,7 +398,6 @@ class LLMGateway:
         route_config = self.routing_config.routes[route_name]
         provider = self.routing_config.providers[route_config.provider]
         content = self.invoke_route(route_config, provider, messages)
-        
         result = RoutedLLMResult(
             content=content,
             route=route_name,
@@ -320,11 +406,14 @@ class LLMGateway:
             classifier_model=self.routing_config.classifier.model,
             reason=decision.reason,
         )
+        if response_cache_key is not None:
+            self._cache_set("response", response_cache_key, json.dumps(asdict(result), sort_keys=True))
 
         duration = perf_counter() - start_time
         self._record_request_metrics(result, used_classifier, duration)
         return result
 
 
+@lru_cache()
 def get_gateway() -> LLMGateway:
     return LLMGateway()
