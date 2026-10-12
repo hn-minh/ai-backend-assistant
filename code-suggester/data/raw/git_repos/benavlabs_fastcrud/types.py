@@ -1,0 +1,65 @@
+from typing import TypeVar, Any, Generic
+from datetime import datetime
+from decimal import Decimal
+
+from pydantic import BaseModel
+from typing_extensions import TypedDict, NotRequired
+
+FilterValue = str | int | float | bool | datetime | Decimal | None
+FilterValueSequence = list[FilterValue] | tuple[FilterValue, ...] | set[FilterValue]
+FilterValueType = FilterValue | FilterValueSequence | dict[str, FilterValue]
+
+ModelType = TypeVar("ModelType", bound=Any)
+
+SelectSchemaType = TypeVar("SelectSchemaType", bound=BaseModel)
+CreateSchemaType = TypeVar("CreateSchemaType", bound=BaseModel)
+UpdateSchemaType = TypeVar("UpdateSchemaType", bound=BaseModel)
+UpdateSchemaInternalType = TypeVar("UpdateSchemaInternalType", bound=BaseModel)
+DeleteSchemaType = TypeVar("DeleteSchemaType", bound=BaseModel)
+
+# Method-level TypeVar for schema_to_select. Unlike the class-level SelectSchemaType,
+# this is resolved fresh at each call site, so passing any schema to schema_to_select
+# correctly propagates to the return type regardless of how the class was instantiated.
+_OverrideSchemaType = TypeVar("_OverrideSchemaType", bound=BaseModel)
+
+
+class GetMultiResponseDict(TypedDict):
+    """Response type for get_multi when return_as_model=False.
+
+    Note: This assumes the default multi_response_key="data".
+    If using a custom multi_response_key, the actual key will differ.
+    """
+
+    data: list[dict[str, Any]]
+    total_count: NotRequired[int]
+
+
+class GetMultiResponseModel(TypedDict, Generic[SelectSchemaType]):
+    """Response type for get_multi when return_as_model=True with schema_to_select.
+
+    Note: This assumes the default multi_response_key="data".
+    If using a custom multi_response_key, the actual key will differ.
+    """
+
+    data: list[SelectSchemaType]
+    total_count: NotRequired[int]
+
+
+class UpsertMultiResponseDict(TypedDict):
+    """Response type for upsert_multi when return_as_model=False.
+
+    Note: This assumes the default multi_response_key="data".
+    If using a custom multi_response_key, the actual key will differ.
+    """
+
+    data: list[dict[str, Any]]
+
+
+class UpsertMultiResponseModel(TypedDict, Generic[SelectSchemaType]):
+    """Response type for upsert_multi when return_as_model=True with schema_to_select.
+
+    Note: This assumes the default multi_response_key="data".
+    If using a custom multi_response_key, the actual key will differ.
+    """
+
+    data: list[SelectSchemaType]
