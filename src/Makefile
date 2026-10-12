@@ -1,13 +1,25 @@
+CONCURRENCIES ?= 1 2 4 8 16 32 64 128
+
 bench_serving:
-	python benchmarks/benchmark_serving.py \
-		--model routing-classifier \
-		--tokenizer Qwen/Qwen2.5-Coder-7B-Instruct \
-		--endpoint /v1/completions \
-		--dataset-name sharegpt \
-		--dataset-path benchmarks/ShareGPT_V3_unfiltered_cleaned_split.json \
-		--request-rate 10.0 \
-		--max-concurrency 5 \
-		--result-dir ./benchmarks/results --save-result --save-detailed
+	@for concurrency in $(CONCURRENCIES); do \
+		echo "=== concurrency = $$concurrency ==="; \
+		python benchmarks/benchmark_serving.py \
+			--model routing-classifier \
+			--tokenizer Qwen/Qwen2.5-Coder-7B-Instruct \
+			--endpoint /v1/completions \
+			--dataset-name sharegpt \
+			--dataset-path benchmarks/ShareGPT_V3_unfiltered_cleaned_split.json \
+			--request-rate inf \
+			--max-concurrency $$concurrency \
+			--lora-modules backend-lora bash-lora \
+			--percentile-metrics ttft,tpot,e2el \
+			--metric-percentiles 95,99 \
+			--result-dir ./benchmarks/results \
+			--save-result \
+			--save-detailed \
+			--metadata concurrency=$$concurrency || exit 1; \
+	done
+
 
 bench_prefix_caching:
 	python benchmarks/benchmark_prefix_caching.py \
